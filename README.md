@@ -15,8 +15,10 @@ Or build from source:
 ```bash
 git clone https://github.com/dmcbane/mcp-shuttle.git
 cd mcp-shuttle
-go build -o mcp-shuttle .
+make build
 ```
+
+This builds with OAuth support enabled. You can also use `go build -tags mcp_go_client_oauth -o mcp-shuttle .` directly.
 
 ## Usage
 
@@ -75,9 +77,34 @@ Configure in your MCP client (Claude Desktop, Claude Code, Cursor, etc.):
 | `http-only` | HTTP Streamable only |
 | `sse-only` | SSE only |
 
+### OAuth authentication
+
+For servers that require OAuth 2.1, mcp-shuttle handles the entire flow automatically:
+
+1. Opens your browser for authorization
+2. Runs a local callback server to receive the auth code
+3. Exchanges it for tokens via Dynamic Client Registration (RFC 7591)
+4. Stores tokens in `~/.mcp-auth/` (0600 permissions)
+5. Auto-refreshes expired tokens on subsequent runs
+
+No configuration needed — just point at the server:
+
+```json
+{
+  "mcpServers": {
+    "my-oauth-server": {
+      "command": "mcp-shuttle",
+      "args": ["https://mcp.example.com"]
+    }
+  }
+}
+```
+
+Use `--port` to change the OAuth callback port (default 3334).
+
 ## Status
 
-Phase 1 (core proxy) is complete. OAuth support (Phase 2) and tool filtering (Phase 3) are in progress.
+Phase 1 (core proxy) and Phase 2 (OAuth 2.1) are complete. Tool filtering (Phase 3) is in progress.
 
 ## License
 
