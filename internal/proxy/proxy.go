@@ -2,25 +2,35 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"path"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// MessageFilter is a function that can inspect or modify messages in flight.
-// Return the message to forward it, or return nil to drop it.
-// Returning a non-nil error sends a JSON-RPC error response (for requests).
-type MessageFilter func(msg any) (any, error)
+// MessageInterceptor can inspect and modify messages in flight.
+// It receives the raw message and returns:
+//   - the message to forward (possibly modified)
+//   - a response to send back to the source instead of forwarding (for blocking)
+//   - an error if something went wrong
+//
+// To forward unchanged: return (msg, nil, nil)
+// To block with a response: return (nil, response, nil)
+// To drop silently: return (nil, nil, nil)
+type MessageInterceptor func(msg jsonrpc.Message) (forward jsonrpc.Message, respond jsonrpc.Message, err error)
 
 // Proxy shuttles JSON-RPC messages between a local and remote MCP connection.
 type Proxy struct {
 	Logger *slog.Logger
 
-	// Optional filters for messages flowing in each direction.
-	ToRemote MessageFilter
-	ToLocal  MessageFilter
+	// OnLocalToRemote is called for every message from local to remote.
+	OnLocalToRemote MessageInterceptor
+	// OnRemoteToLocal is called for every message from remote to local.
+	OnRemoteToLocal MessageInterceptor
 }
 
 // Run connects both transports and forwards messages bidirectionally until
@@ -56,19 +66,18 @@ func (p *Proxy) Run(ctx context.Context, local, remote mcp.Transport) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		errCh <- p.forward(ctx, localConn, remoteConn, "local→remote", logger)
+		errCh <- p.forward(ctx, localConn, remoteConn, "local→remote", p.OnLocalToRemote, logger)
 		cancel()
 	}()
 	go func() {
 		defer wg.Done()
-		errCh <- p.forward(ctx, remoteConn, localConn, "remote→local", logger)
+		errCh <- p.forward(ctx, remoteConn, localConn, "remote→local", p.OnRemoteToLocal, logger)
 		cancel()
 	}()
 
 	wg.Wait()
 	close(errCh)
 
-	// Collect errors, ignoring context cancellation (normal shutdown).
 	var errs []error
 	for e := range errCh {
 		if e != nil && !errors.Is(e, context.Canceled) {
@@ -81,7 +90,7 @@ func (p *Proxy) Run(ctx context.Context, local, remote mcp.Transport) error {
 	return nil
 }
 
-func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction string, logger *slog.Logger) error {
+func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction string, intercept MessageInterceptor, logger *slog.Logger) error {
 	for {
 		msg, err := src.Read(ctx)
 		if err != nil {
@@ -94,6 +103,27 @@ func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction 
 
 		logger.Debug("forwarding message", "direction", direction)
 
+		if intercept != nil {
+			fwd, respond, ierr := intercept(msg)
+			if ierr != nil {
+				logger.Error("interceptor error", "direction", direction, "error", ierr)
+				continue
+			}
+			if respond != nil {
+				if err := src.Write(ctx, respond); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					logger.Error("write response error", "direction", direction, "error", err)
+				}
+				continue
+			}
+			if fwd == nil {
+				continue
+			}
+			msg = fwd
+		}
+
 		if err := dst.Write(ctx, msg); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -102,4 +132,89 @@ func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction 
 			return err
 		}
 	}
+}
+
+// ToolFilterInterceptors returns interceptors that filter tools based on
+// --ignore-tool wildcard patterns. Returns nil, nil if patterns is empty.
+func ToolFilterInterceptors(patterns []string, logger *slog.Logger) (localToRemote, remoteToLocal MessageInterceptor) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	localToRemote = func(msg jsonrpc.Message) (jsonrpc.Message, jsonrpc.Message, error) {
+		req, ok := msg.(*jsonrpc.Request)
+		if !ok || req.Method != "tools/call" {
+			return msg, nil, nil
+		}
+		var call struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &call); err != nil {
+			return msg, nil, nil
+		}
+		if matchesAny(patterns, call.Name) {
+			logger.Info("blocked tool call", "tool", call.Name)
+			resp := &jsonrpc.Response{
+				ID: req.ID,
+				Error: &jsonrpc.Error{
+					Code:    jsonrpc.CodeMethodNotFound,
+					Message: "tool not found: " + call.Name,
+				},
+			}
+			return nil, resp, nil
+		}
+		return msg, nil, nil
+	}
+
+	remoteToLocal = func(msg jsonrpc.Message) (jsonrpc.Message, jsonrpc.Message, error) {
+		resp, ok := msg.(*jsonrpc.Response)
+		if !ok || resp.Result == nil {
+			return msg, nil, nil
+		}
+		// Check if this looks like a tools/list response.
+		var result map[string]json.RawMessage
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return msg, nil, nil
+		}
+		toolsRaw, ok := result["tools"]
+		if !ok {
+			return msg, nil, nil
+		}
+
+		var tools []json.RawMessage
+		if err := json.Unmarshal(toolsRaw, &tools); err != nil {
+			return msg, nil, nil
+		}
+
+		filtered := make([]json.RawMessage, 0, len(tools))
+		for _, raw := range tools {
+			var entry struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				filtered = append(filtered, raw)
+				continue
+			}
+			if !matchesAny(patterns, entry.Name) {
+				filtered = append(filtered, raw)
+			} else {
+				logger.Debug("filtered tool from list", "tool", entry.Name)
+			}
+		}
+
+		result["tools"], _ = json.Marshal(filtered)
+		resp.Result, _ = json.Marshal(result)
+		return resp, nil, nil
+	}
+
+	return localToRemote, remoteToLocal
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if matched, _ := path.Match(p, name); matched {
+			return true
+		}
+	}
+	return false
 }

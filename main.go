@@ -16,8 +16,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const Version = "0.3.0"
+
 // setupOAuth is set by main_oauth.go when built with the mcp_go_client_oauth tag.
-// It returns an auth.OAuthHandler and an http.Client that may include custom headers.
 var setupOAuth func(cfg *cli.Config, logger *slog.Logger, baseClient *http.Client) (auth.OAuthHandler, error)
 
 func main() {
@@ -56,13 +57,28 @@ func main() {
 	// Remote side: build transport based on mode.
 	remote := buildRemoteTransport(cfg, httpClient, oauthHandler, logger)
 
-	logger.Info("starting proxy", "server", cfg.ServerURL, "transport", cfg.Transport)
+	// Set up tool filtering interceptors.
+	toRemote, toLocal := proxy.ToolFilterInterceptors(cfg.IgnoreTools, logger)
 
-	p := &proxy.Proxy{Logger: logger}
+	logger.Info("starting proxy",
+		"version", Version,
+		"server", cfg.ServerURL,
+		"transport", cfg.Transport,
+		"ignore_tools", len(cfg.IgnoreTools),
+	)
+
+	p := &proxy.Proxy{
+		Logger:          logger,
+		OnLocalToRemote: toRemote,
+		OnRemoteToLocal: toLocal,
+	}
+
 	if err := p.Run(ctx, local, remote); err != nil {
 		logger.Error("proxy error", "error", err)
 		os.Exit(1)
 	}
+
+	logger.Info("proxy shut down gracefully")
 }
 
 func setupLogger(cfg *cli.Config) *slog.Logger {
@@ -87,16 +103,6 @@ func buildRemoteTransport(cfg *cli.Config, httpClient *http.Client, oauthHandler
 	sse := &mcp.SSEClientTransport{
 		Endpoint:   cfg.ServerURL,
 		HTTPClient: httpClient,
-	}
-
-	// For SSE transport with OAuth, wrap the HTTP client with a bearer token
-	// injecting RoundTripper since SSEClientTransport lacks OAuthHandler support.
-	if oauthHandler != nil && httpClient == nil {
-		// SSE needs an HTTP client that can inject tokens.
-		// The StreamableClientTransport handles this internally via OAuthHandler.
-		// For SSE, we'd need a custom RoundTripper. This is handled at the
-		// transport level when the token source is available.
-		logger.Debug("OAuth handler configured for streamable transport")
 	}
 
 	switch cfg.Transport {

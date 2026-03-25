@@ -24,6 +24,7 @@ func init() {
 			Logger:       logger,
 			Storage:      storage,
 			HTTPClient:   baseClient,
+			Resource:     cfg.Resource,
 		})
 		if err != nil {
 			return nil, err

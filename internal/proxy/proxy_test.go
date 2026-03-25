@@ -101,3 +101,124 @@ func TestProxy_ForwardsMessages(t *testing.T) {
 		t.Logf("proxy exited: %v", err) // context.Canceled is expected
 	}
 }
+
+func TestProxy_ToolFilterBlocksCall(t *testing.T) {
+	localClient, localServer := mcp.NewInMemoryTransports()
+	remoteClient, remoteServer := mcp.NewInMemoryTransports()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	toRemote, toLocal := ToolFilterInterceptors([]string{"delete*"}, logger)
+	p := &Proxy{
+		Logger:          logger,
+		OnLocalToRemote: toRemote,
+		OnRemoteToLocal: toLocal,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() { p.Run(ctx, localServer, remoteClient) }()
+
+	localConn, _ := localClient.Connect(ctx)
+	defer localConn.Close()
+	// We won't read from remoteServer for this test — the call should be blocked.
+	_ = remoteServer
+
+	reqID, _ := jsonrpc.MakeID(float64(1))
+	req := &jsonrpc.Request{
+		ID:     reqID,
+		Method: "tools/call",
+		Params: json.RawMessage(`{"name":"delete_user","arguments":{}}`),
+	}
+	if err := localConn.Write(ctx, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Should receive an error response back (not forwarded to remote).
+	msg, err := localConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	resp, ok := msg.(*jsonrpc.Response)
+	if !ok {
+		t.Fatalf("expected *jsonrpc.Response, got %T", msg)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error response for blocked tool call")
+	}
+
+	cancel()
+}
+
+func TestProxy_ToolFilterFiltersListResponse(t *testing.T) {
+	localClient, localServer := mcp.NewInMemoryTransports()
+	remoteClient, remoteServer := mcp.NewInMemoryTransports()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	toRemote, toLocal := ToolFilterInterceptors([]string{"delete*", "*admin*"}, logger)
+	p := &Proxy{
+		Logger:          logger,
+		OnLocalToRemote: toRemote,
+		OnRemoteToLocal: toLocal,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() { p.Run(ctx, localServer, remoteClient) }()
+
+	localConn, _ := localClient.Connect(ctx)
+	defer localConn.Close()
+	remoteConn, _ := remoteServer.Connect(ctx)
+	defer remoteConn.Close()
+
+	// Send tools/list request from local.
+	reqID, _ := jsonrpc.MakeID(float64(1))
+	req := &jsonrpc.Request{
+		ID:     reqID,
+		Method: "tools/list",
+		Params: json.RawMessage(`{}`),
+	}
+	if err := localConn.Write(ctx, req); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	// Read it on remote side and reply with tools.
+	msg, _ := remoteConn.Read(ctx)
+	_ = msg
+	resp := &jsonrpc.Response{
+		ID:     reqID,
+		Result: json.RawMessage(`{"tools":[{"name":"read_file"},{"name":"delete_file"},{"name":"super_admin"}]}`),
+	}
+	if err := remoteConn.Write(ctx, resp); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+
+	// Read the filtered response on local side.
+	rmsg, err := localConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	gotResp, ok := rmsg.(*jsonrpc.Response)
+	if !ok {
+		t.Fatalf("expected *jsonrpc.Response, got %T", rmsg)
+	}
+
+	// Should only contain read_file.
+	var result struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(gotResp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(result.Tools) != 1 {
+		t.Fatalf("expected 1 tool, got %d: %+v", len(result.Tools), result.Tools)
+	}
+	if result.Tools[0].Name != "read_file" {
+		t.Errorf("expected tool name 'read_file', got %q", result.Tools[0].Name)
+	}
+
+	cancel()
+}

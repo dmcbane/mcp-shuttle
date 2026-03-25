@@ -56,10 +56,14 @@ Configure in your MCP client (Claude Desktop, Claude Code, Cursor, etc.):
 ```
   -header value
         Custom header in 'Name: Value' format (repeatable)
+  -ignore-tool value
+        Tool name pattern to hide (wildcard, repeatable)
   -transport string
         Transport strategy: http-first, sse-first, http-only, sse-only (default "http-first")
   -port int
         OAuth callback port (default 3334)
+  -resource string
+        Resource identifier for OAuth session isolation
   -allow-http
         Allow unencrypted HTTP connections
   -debug
@@ -101,10 +105,32 @@ No configuration needed — just point at the server:
 ```
 
 Use `--port` to change the OAuth callback port (default 3334).
+Use `--resource` to isolate OAuth sessions for multi-tenant scenarios.
 
-## Status
+### Tool filtering
 
-Phase 1 (core proxy) and Phase 2 (OAuth 2.1) are complete. Tool filtering (Phase 3) is in progress.
+Hide tools from the client using wildcard patterns:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "mcp-shuttle",
+      "args": [
+        "https://mcp.example.com",
+        "--ignore-tool", "delete*",
+        "--ignore-tool", "*admin*"
+      ]
+    }
+  }
+}
+```
+
+Filtered tools are removed from `tools/list` responses, and `tools/call` requests for filtered tools return a JSON-RPC error.
+
+## License
+
+MIT
 
 ## License
 

@@ -34,6 +34,8 @@ type Config struct {
 	AllowHTTP    bool
 	Debug        bool
 	Silent       bool
+	IgnoreTools  []string
+	Resource     string
 }
 
 // Parse parses CLI arguments and returns a Config. The args slice should not
@@ -51,7 +53,7 @@ func Parse(args []string) (*Config, error) {
 			// If it's a flag that takes a value (not a boolean), consume the next arg too.
 			// We check by looking at known value-bearing flags.
 			switch args[i] {
-			case "--header", "--transport", "--port":
+			case "--header", "--transport", "--port", "--ignore-tool", "--resource":
 				if i+1 < len(args) {
 					i++
 					flagArgs = append(flagArgs, args[i])
@@ -65,13 +67,16 @@ func Parse(args []string) (*Config, error) {
 	fs := flag.NewFlagSet("mcp-shuttle", flag.ContinueOnError)
 
 	var headers headerList
+	var ignoreTools headerList
 	fs.Var(&headers, "header", "Custom header in 'Name: Value' format (repeatable)")
+	fs.Var(&ignoreTools, "ignore-tool", "Tool name pattern to hide (wildcard, repeatable)")
 
 	transport := fs.String("transport", "http-first", "Transport strategy: http-first, sse-first, http-only, sse-only")
 	callbackPort := fs.Int("port", 3334, "OAuth callback port")
 	allowHTTP := fs.Bool("allow-http", false, "Allow unencrypted HTTP connections")
 	debug := fs.Bool("debug", false, "Enable debug logging to stderr")
 	silent := fs.Bool("silent", false, "Suppress all logging output")
+	resource := fs.String("resource", "", "Resource identifier for OAuth session isolation")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
@@ -111,5 +116,7 @@ func Parse(args []string) (*Config, error) {
 		AllowHTTP:    *allowHTTP,
 		Debug:        *debug,
 		Silent:       *silent,
+		IgnoreTools:  ignoreTools,
+		Resource:     *resource,
 	}, nil
 }

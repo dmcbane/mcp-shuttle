@@ -88,6 +88,36 @@ func TestParse_AllowHTTP(t *testing.T) {
 	}
 }
 
+func TestParse_IgnoreTools(t *testing.T) {
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--ignore-tool", "delete*",
+		"--ignore-tool", "*admin*",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.IgnoreTools) != 2 {
+		t.Fatalf("got %d ignore patterns, want 2", len(cfg.IgnoreTools))
+	}
+	if cfg.IgnoreTools[0] != "delete*" || cfg.IgnoreTools[1] != "*admin*" {
+		t.Errorf("got IgnoreTools=%v, want [delete* *admin*]", cfg.IgnoreTools)
+	}
+}
+
+func TestParse_Resource(t *testing.T) {
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--resource", "tenant-123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Resource != "tenant-123" {
+		t.Errorf("got Resource=%q, want %q", cfg.Resource, "tenant-123")
+	}
+}
+
 func TestParse_DebugAndSilent(t *testing.T) {
 	cfg, err := Parse([]string{"https://mcp.example.com", "--debug"})
 	if err != nil {
