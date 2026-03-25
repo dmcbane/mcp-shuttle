@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,14 +29,22 @@ const encryptedPrefix = "mcp-shuttle-enc:1:"
 
 // Storage persists OAuth tokens and client credentials to ~/.mcp-auth/.
 type Storage struct {
-	dir       string
-	encKey    []byte // AES-256 key for token encryption; nil disables encryption
+	dir    string
+	encKey []byte // AES-256 key for token encryption; nil disables encryption
 }
 
 // NewStorage creates a Storage rooted at dir, creating it if needed.
 // If dir is empty, defaults to ~/.mcp-auth/.
-// Tokens are encrypted at rest using a machine-specific key.
-func NewStorage(dir string) (*Storage, error) {
+// Tokens are encrypted at rest using a key derived from (in priority order):
+//  1. MCP_SHUTTLE_ENCRYPTION_KEY environment variable
+//  2. Machine-specific attributes (UID, hostname, home directory)
+//
+// If logger is nil, slog.Default() is used.
+func NewStorage(dir string, logger *slog.Logger) (*Storage, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -47,7 +56,13 @@ func NewStorage(dir string) (*Storage, error) {
 		return nil, fmt.Errorf("cannot create storage directory: %w", err)
 	}
 
-	encKey := deriveKey(machineSecret(), dir)
+	secret, usedFallback := encryptionSecret()
+	if usedFallback {
+		logger.Warn("token encryption using weak fallback key — " +
+			"set MCP_SHUTTLE_ENCRYPTION_KEY for stronger protection; " +
+			"file permissions (0600) are the primary security control")
+	}
+	encKey := deriveKey(secret, dir)
 
 	return &Storage{dir: dir, encKey: encKey}, nil
 }

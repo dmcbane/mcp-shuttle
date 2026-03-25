@@ -13,7 +13,7 @@ import (
 
 func init() {
 	setupOAuth = func(cfg *cli.Config, logger *slog.Logger, baseClient *http.Client) (auth.OAuthHandler, error) {
-		storage, err := oauth.NewStorage("")
+		storage, err := oauth.NewStorage("", logger)
 		if err != nil {
 			return nil, err
 		}

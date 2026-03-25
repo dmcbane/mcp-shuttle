@@ -60,7 +60,7 @@ func NewHandler(cfg *HandlerConfig) (*Handler, error) {
 	}
 	if cfg.Storage == nil {
 		var err error
-		cfg.Storage, err = NewStorage("")
+		cfg.Storage, err = NewStorage("", cfg.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("creating token storage: %w", err)
 		}

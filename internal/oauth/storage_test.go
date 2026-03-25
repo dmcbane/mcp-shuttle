@@ -13,7 +13,7 @@ import (
 
 func TestStorage_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestStorage_RoundTrip(t *testing.T) {
 
 func TestStorage_LoadMissing(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestStorage_LoadMissing(t *testing.T) {
 
 func TestStorage_Delete(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestStorage_Delete(t *testing.T) {
 
 func TestStorage_EncryptedOnDisk(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestStorage_EncryptedOnDisk(t *testing.T) {
 
 func TestStorage_BackwardCompatibility_PlaintextToken(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}
@@ -154,9 +154,52 @@ func TestStorage_BackwardCompatibility_PlaintextToken(t *testing.T) {
 	}
 }
 
+func TestStorage_EnvVarEncryptionKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MCP_SHUTTLE_ENCRYPTION_KEY", "my-custom-secret-key")
+
+	store, err := NewStorage(dir, nil)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	serverURL := "https://mcp.example.com"
+	token := &oauth2.Token{AccessToken: "env-key-token", TokenType: "Bearer"}
+
+	if err := store.SaveToken(serverURL, token); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+
+	// A storage instance without the env var should fail to decrypt.
+	t.Setenv("MCP_SHUTTLE_ENCRYPTION_KEY", "different-key")
+	store2, err := NewStorage(dir, nil)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	_, err = store2.LoadToken(serverURL)
+	if err == nil {
+		t.Fatal("expected decryption failure with different env key")
+	}
+
+	// Restore correct key — should decrypt fine.
+	t.Setenv("MCP_SHUTTLE_ENCRYPTION_KEY", "my-custom-secret-key")
+	store3, err := NewStorage(dir, nil)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+	loaded, err := store3.LoadToken(serverURL)
+	if err != nil {
+		t.Fatalf("LoadToken: %v", err)
+	}
+	if loaded.AccessToken != "env-key-token" {
+		t.Errorf("AccessToken = %q, want %q", loaded.AccessToken, "env-key-token")
+	}
+}
+
 func TestStorage_FilePermissions(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewStorage(dir)
+	store, err := NewStorage(dir, nil)
 	if err != nil {
 		t.Fatalf("NewStorage: %v", err)
 	}

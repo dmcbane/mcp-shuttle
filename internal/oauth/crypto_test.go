@@ -82,3 +82,11 @@ func TestMachineSecret_NotEmpty(t *testing.T) {
 		t.Fatal("machineSecret() should return a non-empty string")
 	}
 }
+
+func TestMachineSecret_WarnsFallback(t *testing.T) {
+	_, usedFallback := machineSecretWithStatus()
+	// On a normal dev machine, this should NOT use fallback.
+	if usedFallback {
+		t.Log("machineSecret used fallback — expected in sandboxed/container environments")
+	}
+}

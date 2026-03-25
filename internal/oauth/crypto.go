@@ -64,17 +64,26 @@ func decrypt(key, ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// machineSecret returns a stable, machine-specific string used as the base secret
-// for token encryption key derivation. It combines the user's UID/username and
-// hostname to create a value that is:
-//   - Stable across process restarts
-//   - Different across user accounts on the same machine
-//   - Different across machines for the same user
+// encryptionKeyEnvVar is the environment variable for overriding the token encryption key.
+const encryptionKeyEnvVar = "MCP_SHUTTLE_ENCRYPTION_KEY"
+
+// encryptionSecret returns the secret used for token encryption key derivation.
+// Priority:
+//  1. MCP_SHUTTLE_ENCRYPTION_KEY environment variable (strongest)
+//  2. Machine-specific attributes (defense-in-depth)
+//  3. Hardcoded fallback (last resort, logged as warning)
 //
-// This is NOT a cryptographic secret — it provides defense-in-depth against
-// casual file access (e.g., another user reading ~/.mcp-auth/ on a shared system).
-// The primary protection is the 0600 file permissions.
-func machineSecret() string {
+// Returns the secret and whether the weak fallback was used.
+func encryptionSecret() (secret string, usedFallback bool) {
+	if envKey := os.Getenv(encryptionKeyEnvVar); envKey != "" {
+		return envKey, false
+	}
+	return machineSecretWithStatus()
+}
+
+// machineSecretWithStatus returns a stable, machine-specific string and reports
+// whether the weak hardcoded fallback was used.
+func machineSecretWithStatus() (string, bool) {
 	parts := ""
 
 	if u, err := user.Current(); err == nil {
@@ -90,8 +99,23 @@ func machineSecret() string {
 	}
 
 	if parts == "" {
-		parts = "mcp-shuttle-fallback-secret"
+		return "mcp-shuttle-fallback-secret", true
 	}
 
-	return parts
+	return parts, false
+}
+
+// machineSecret returns a stable, machine-specific string used as the base secret
+// for token encryption key derivation. It combines the user's UID/username and
+// hostname to create a value that is:
+//   - Stable across process restarts
+//   - Different across user accounts on the same machine
+//   - Different across machines for the same user
+//
+// This is NOT a cryptographic secret — it provides defense-in-depth against
+// casual file access (e.g., another user reading ~/.mcp-auth/ on a shared system).
+// The primary protection is the 0600 file permissions.
+func machineSecret() string {
+	secret, _ := machineSecretWithStatus()
+	return secret
 }

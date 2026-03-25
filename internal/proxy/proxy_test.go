@@ -222,3 +222,78 @@ func TestProxy_ToolFilterFiltersListResponse(t *testing.T) {
 
 	cancel()
 }
+
+func TestProxy_ToolFilterOnlyFiltersToolsListResponses(t *testing.T) {
+	// Verify that responses with a "tools" key that aren't replies to
+	// tools/list requests are NOT filtered (request-ID correlation).
+	localClient, localServer := mcp.NewInMemoryTransports()
+	remoteClient, remoteServer := mcp.NewInMemoryTransports()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	toRemote, toLocal := ToolFilterInterceptors([]string{"delete*"}, logger)
+	p := &Proxy{
+		Logger:          logger,
+		OnLocalToRemote: toRemote,
+		OnRemoteToLocal: toLocal,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() { p.Run(ctx, localServer, remoteClient) }()
+
+	localConn, _ := localClient.Connect(ctx)
+	defer localConn.Close()
+	remoteConn, _ := remoteServer.Connect(ctx)
+	defer remoteConn.Close()
+
+	// Send a NON-tools/list request (e.g., some custom method).
+	reqID, _ := jsonrpc.MakeID(float64(42))
+	req := &jsonrpc.Request{
+		ID:     reqID,
+		Method: "resources/list",
+		Params: json.RawMessage(`{}`),
+	}
+	if err := localConn.Write(ctx, req); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	// Read it on remote side.
+	msg, _ := remoteConn.Read(ctx)
+	_ = msg
+
+	// Reply with a response that happens to have a "tools" key
+	// (should NOT be filtered since it's not a tools/list response).
+	resp := &jsonrpc.Response{
+		ID:     reqID,
+		Result: json.RawMessage(`{"tools":[{"name":"delete_file"},{"name":"read_file"}]}`),
+	}
+	if err := remoteConn.Write(ctx, resp); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+
+	// Read the response on local side — should be UNFILTERED.
+	rmsg, err := localConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	gotResp, ok := rmsg.(*jsonrpc.Response)
+	if !ok {
+		t.Fatalf("expected *jsonrpc.Response, got %T", rmsg)
+	}
+
+	var result struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(gotResp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	// Both tools should be present — no filtering for non-tools/list responses.
+	if len(result.Tools) != 2 {
+		t.Fatalf("expected 2 tools (unfiltered), got %d: %+v", len(result.Tools), result.Tools)
+	}
+
+	cancel()
+}

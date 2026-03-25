@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path"
 	"sync"
@@ -134,18 +135,48 @@ func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction 
 	}
 }
 
+// idKey returns a string key for a jsonrpc.ID, suitable for use as a map key.
+func idKey(id jsonrpc.ID) string {
+	if !id.IsValid() {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%v", id.Raw())
+}
+
 // ToolFilterInterceptors returns interceptors that filter tools based on
 // --ignore-tool wildcard patterns. Returns nil, nil if patterns is empty.
+//
+// Uses request-ID correlation: the local→remote interceptor tracks IDs of
+// tools/list requests, and the remote→local interceptor only filters responses
+// that match a tracked ID. This prevents accidentally filtering unrelated
+// responses that happen to contain a "tools" key.
 func ToolFilterInterceptors(patterns []string, logger *slog.Logger) (localToRemote, remoteToLocal MessageInterceptor) {
 	if len(patterns) == 0 {
 		return nil, nil
 	}
 
+	// Track pending tools/list request IDs for precise response filtering.
+	var mu sync.Mutex
+	pendingListIDs := make(map[string]bool)
+
 	localToRemote = func(msg jsonrpc.Message) (jsonrpc.Message, jsonrpc.Message, error) {
 		req, ok := msg.(*jsonrpc.Request)
-		if !ok || req.Method != "tools/call" {
+		if !ok {
 			return msg, nil, nil
 		}
+
+		// Track tools/list request IDs so we can filter the matching response.
+		if req.Method == "tools/list" && req.ID.IsValid() {
+			key := idKey(req.ID)
+			mu.Lock()
+			pendingListIDs[key] = true
+			mu.Unlock()
+		}
+
+		if req.Method != "tools/call" {
+			return msg, nil, nil
+		}
+
 		var call struct {
 			Name string `json:"name"`
 		}
@@ -171,7 +202,21 @@ func ToolFilterInterceptors(patterns []string, logger *slog.Logger) (localToRemo
 		if !ok || resp.Result == nil {
 			return msg, nil, nil
 		}
-		// Check if this looks like a tools/list response.
+
+		// Only filter responses that correspond to a tracked tools/list request.
+		key := idKey(resp.ID)
+		mu.Lock()
+		isToolsList := pendingListIDs[key]
+		if isToolsList {
+			delete(pendingListIDs, key)
+		}
+		mu.Unlock()
+
+		if !isToolsList {
+			return msg, nil, nil
+		}
+
+		// Parse and filter the tools array.
 		var result map[string]json.RawMessage
 		if err := json.Unmarshal(resp.Result, &result); err != nil {
 			return msg, nil, nil
