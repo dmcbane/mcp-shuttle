@@ -145,6 +145,55 @@ func TestParse_OAuthStaticCredentials_MissingSecret(t *testing.T) {
 	}
 }
 
+func TestParse_HeaderEnvVarExpansion(t *testing.T) {
+	t.Setenv("TEST_API_KEY", "secret-key-123")
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--header", "Authorization: Bearer ${TEST_API_KEY}",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Headers["Authorization"] != "Bearer secret-key-123" {
+		t.Errorf("got Authorization=%q, want %q", cfg.Headers["Authorization"], "Bearer secret-key-123")
+	}
+}
+
+func TestParse_HeaderEnvVarMissing(t *testing.T) {
+	t.Setenv("TEST_MISSING_VAR", "")
+	_, err := Parse([]string{
+		"https://mcp.example.com",
+		"--header", "Authorization: Bearer ${DEFINITELY_UNSET_VAR_12345}",
+	})
+	if err == nil {
+		t.Fatal("expected error for unset env var in header")
+	}
+}
+
+func TestParse_MaxMessageSize(t *testing.T) {
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--max-message-size", "10485760",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.MaxMessageSize != 10485760 {
+		t.Errorf("got MaxMessageSize=%d, want 10485760", cfg.MaxMessageSize)
+	}
+}
+
+func TestParse_MaxMessageSizeDefault(t *testing.T) {
+	cfg, err := Parse([]string{"https://mcp.example.com"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Default should be 0 (unlimited).
+	if cfg.MaxMessageSize != 0 {
+		t.Errorf("got MaxMessageSize=%d, want 0 (default)", cfg.MaxMessageSize)
+	}
+}
+
 func TestParse_DebugAndSilent(t *testing.T) {
 	cfg, err := Parse([]string{"https://mcp.example.com", "--debug"})
 	if err != nil {

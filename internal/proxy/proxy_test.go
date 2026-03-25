@@ -223,6 +223,81 @@ func TestProxy_ToolFilterFiltersListResponse(t *testing.T) {
 	cancel()
 }
 
+func TestProxy_MaxMessageSize_DropsOversized(t *testing.T) {
+	localClient, localServer := mcp.NewInMemoryTransports()
+	remoteClient, remoteServer := mcp.NewInMemoryTransports()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	p := &Proxy{
+		Logger:         logger,
+		MaxMessageSize: 100, // very small limit
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() { p.Run(ctx, localServer, remoteClient) }()
+
+	localConn, _ := localClient.Connect(ctx)
+	defer localConn.Close()
+	remoteConn, _ := remoteServer.Connect(ctx)
+	defer remoteConn.Close()
+
+	// Send a small message — should pass through.
+	smallID, _ := jsonrpc.MakeID(float64(1))
+	smallReq := &jsonrpc.Request{
+		ID:     smallID,
+		Method: "ping",
+		Params: json.RawMessage(`{}`),
+	}
+	if err := localConn.Write(ctx, smallReq); err != nil {
+		t.Fatalf("write small: %v", err)
+	}
+	msg, err := remoteConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read small: %v", err)
+	}
+	if req, ok := msg.(*jsonrpc.Request); !ok || req.Method != "ping" {
+		t.Fatalf("expected ping request, got %T", msg)
+	}
+
+	// Send an oversized message — should be dropped.
+	bigID, _ := jsonrpc.MakeID(float64(2))
+	bigPayload := make([]byte, 200)
+	for i := range bigPayload {
+		bigPayload[i] = 'x'
+	}
+	bigReq := &jsonrpc.Request{
+		ID:     bigID,
+		Method: "tools/call",
+		Params: json.RawMessage(`{"data":"` + string(bigPayload) + `"}`),
+	}
+	if err := localConn.Write(ctx, bigReq); err != nil {
+		t.Fatalf("write big: %v", err)
+	}
+
+	// Send another small message after — this should arrive,
+	// proving the big one was dropped.
+	nextID, _ := jsonrpc.MakeID(float64(3))
+	nextReq := &jsonrpc.Request{
+		ID:     nextID,
+		Method: "pong",
+		Params: json.RawMessage(`{}`),
+	}
+	if err := localConn.Write(ctx, nextReq); err != nil {
+		t.Fatalf("write next: %v", err)
+	}
+	msg, err = remoteConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read next: %v", err)
+	}
+	if req, ok := msg.(*jsonrpc.Request); !ok || req.Method != "pong" {
+		t.Fatalf("expected pong request (oversized msg should be dropped), got %T %v", msg, msg)
+	}
+
+	cancel()
+}
+
 func TestProxy_ToolFilterOnlyFiltersToolsListResponses(t *testing.T) {
 	// Verify that responses with a "tools" key that aren't replies to
 	// tools/list requests are NOT filtered (request-ID correlation).

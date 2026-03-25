@@ -3,6 +3,8 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 )
 
@@ -27,17 +29,40 @@ func (h *headerList) Set(val string) error {
 
 // Config holds all CLI configuration for mcp-shuttle.
 type Config struct {
-	ServerURL    string
-	CallbackPort int
-	Headers      map[string]string
-	Transport    TransportMode
-	AllowHTTP    bool
-	Debug        bool
-	Silent       bool
-	IgnoreTools    []string
-	Resource       string
+	ServerURL         string
+	CallbackPort      int
+	Headers           map[string]string
+	Transport         TransportMode
+	AllowHTTP         bool
+	Debug             bool
+	Silent            bool
+	IgnoreTools       []string
+	Resource          string
 	OAuthClientID     string
 	OAuthClientSecret string
+	MaxMessageSize    int64
+}
+
+// envVarPattern matches ${VAR_NAME} references in strings.
+var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// expandEnvVars replaces ${VAR_NAME} references with their environment variable values.
+// Returns an error if a referenced variable is not set.
+func expandEnvVars(s string) (string, error) {
+	var missingVars []string
+	result := envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		varName := envVarPattern.FindStringSubmatch(match)[1]
+		value, ok := os.LookupEnv(varName)
+		if !ok {
+			missingVars = append(missingVars, varName)
+			return match
+		}
+		return value
+	})
+	if len(missingVars) > 0 {
+		return "", fmt.Errorf("unset environment variable(s) in header value: %s", strings.Join(missingVars, ", "))
+	}
+	return result, nil
 }
 
 // Parse parses CLI arguments and returns a Config. The args slice should not
@@ -56,7 +81,7 @@ func Parse(args []string) (*Config, error) {
 			// We check by looking at known value-bearing flags.
 			switch args[i] {
 			case "--header", "--transport", "--port", "--ignore-tool", "--resource",
-				"--oauth-client-id", "--oauth-client-secret":
+				"--oauth-client-id", "--oauth-client-secret", "--max-message-size":
 				if i+1 < len(args) {
 					i++
 					flagArgs = append(flagArgs, args[i])
@@ -71,7 +96,7 @@ func Parse(args []string) (*Config, error) {
 
 	var headers headerList
 	var ignoreTools headerList
-	fs.Var(&headers, "header", "Custom header in 'Name: Value' format (repeatable)")
+	fs.Var(&headers, "header", "Custom header in 'Name: Value' format (repeatable, supports ${ENV_VAR})")
 	fs.Var(&ignoreTools, "ignore-tool", "Tool name pattern to hide (wildcard, repeatable)")
 
 	transport := fs.String("transport", "http-first", "Transport strategy: http-first, sse-first, http-only, sse-only")
@@ -82,6 +107,7 @@ func Parse(args []string) (*Config, error) {
 	resource := fs.String("resource", "", "Resource identifier for OAuth session isolation")
 	oauthClientID := fs.String("oauth-client-id", "", "Pre-registered OAuth client ID")
 	oauthClientSecret := fs.String("oauth-client-secret", "", "Pre-registered OAuth client secret")
+	maxMessageSize := fs.Int64("max-message-size", 0, "Maximum JSON-RPC message size in bytes (0 = unlimited)")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
@@ -110,7 +136,12 @@ func Parse(args []string) (*Config, error) {
 		if !ok {
 			return nil, fmt.Errorf("invalid header format %q, expected 'Name: Value'", h)
 		}
-		parsedHeaders[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		// Expand environment variable references in header values.
+		expandedValue, err := expandEnvVars(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("header %q: %w", strings.TrimSpace(name), err)
+		}
+		parsedHeaders[strings.TrimSpace(name)] = expandedValue
 	}
 
 	if (*oauthClientID == "") != (*oauthClientSecret == "") {
@@ -129,5 +160,6 @@ func Parse(args []string) (*Config, error) {
 		Resource:          *resource,
 		OAuthClientID:     *oauthClientID,
 		OAuthClientSecret: *oauthClientSecret,
+		MaxMessageSize:    *maxMessageSize,
 	}, nil
 }

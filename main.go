@@ -16,7 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // setupOAuth is set by main_oauth.go when built with the mcp_go_client_oauth tag.
 var setupOAuth func(cfg *cli.Config, logger *slog.Logger, baseClient *http.Client) (auth.OAuthHandler, error)
@@ -54,6 +54,18 @@ func main() {
 		}
 	}
 
+	// Warn if SSE transport is used with OAuth — SSE doesn't support OAuth handler.
+	if oauthHandler != nil {
+		switch cfg.Transport {
+		case cli.TransportSSEOnly:
+			logger.Warn("SSE transport does not support OAuth — tokens will not be sent; " +
+				"use http-first or http-only for OAuth-authenticated servers")
+		case cli.TransportSSEFirst:
+			logger.Warn("SSE primary transport does not support OAuth — " +
+				"OAuth tokens will only be sent if fallback to HTTP Streamable occurs")
+		}
+	}
+
 	// Remote side: build transport based on mode.
 	remote := buildRemoteTransport(cfg, httpClient, oauthHandler, logger)
 
@@ -71,6 +83,7 @@ func main() {
 		Logger:          logger,
 		OnLocalToRemote: toRemote,
 		OnRemoteToLocal: toLocal,
+		MaxMessageSize:  cfg.MaxMessageSize,
 	}
 
 	if err := p.Run(ctx, local, remote); err != nil {

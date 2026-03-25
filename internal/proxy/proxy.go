@@ -32,6 +32,11 @@ type Proxy struct {
 	OnLocalToRemote MessageInterceptor
 	// OnRemoteToLocal is called for every message from remote to local.
 	OnRemoteToLocal MessageInterceptor
+
+	// MaxMessageSize is the maximum allowed JSON-RPC message size in bytes.
+	// Messages exceeding this limit are dropped with an error log.
+	// Zero means unlimited.
+	MaxMessageSize int64
 }
 
 // Run connects both transports and forwards messages bidirectionally until
@@ -100,6 +105,19 @@ func (p *Proxy) forward(ctx context.Context, src, dst mcp.Connection, direction 
 			}
 			logger.Error("read error", "direction", direction, "error", err)
 			return err
+		}
+
+		// Enforce message size limit if configured.
+		if p.MaxMessageSize > 0 {
+			encoded, encErr := jsonrpc.EncodeMessage(msg)
+			if encErr == nil && int64(len(encoded)) > p.MaxMessageSize {
+				logger.Warn("dropping oversized message",
+					"direction", direction,
+					"size", len(encoded),
+					"max", p.MaxMessageSize,
+				)
+				continue
+			}
 		}
 
 		logger.Debug("forwarding message", "direction", direction)
