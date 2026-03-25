@@ -173,24 +173,43 @@ mcp-shuttle/
 | [RFC 7636 - PKCE](https://datatracker.ietf.org/doc/html/rfc7636) | Via `oauth2.GenerateVerifier()` + S256 |
 | [JSON-RPC 2.0](https://www.jsonrpc.org/specification) | Via SDK `jsonrpc` package |
 
+### 10. Token encryption at rest
+
+**Decision:** Encrypt stored tokens using AES-256-GCM with a key derived via HKDF from a machine-specific secret (UID + username + hostname + home directory).
+
+**Why:** Plaintext tokens in `~/.mcp-auth/` are vulnerable to casual file access on shared systems or if backups are compromised. AES-256-GCM provides authenticated encryption. The machine-specific key means tokens encrypted on one machine/user can't be decrypted by another, providing defense-in-depth alongside the `0600` file permissions.
+
+**Trade-off:** The key derivation uses non-secret inputs (hostname, UID, home path). This protects against casual access and cross-machine/cross-user scenarios, but not against a determined attacker with root access on the same machine. True secret-based encryption would require a user-provided passphrase or OS keyring integration, which adds UX friction.
+
+**Backward compatibility:** Files without the `mcp-shuttle-enc:1:` prefix are treated as legacy plaintext and loaded transparently. New saves always encrypt.
+
+### 11. Static OAuth client credentials
+
+**Decision:** Support pre-registered OAuth clients via `--oauth-client-id` and `--oauth-client-secret` flags, using the SDK's `PreregisteredClientConfig`.
+
+**Why:** Some OAuth servers don't support Dynamic Client Registration. Pre-registered clients are common in enterprise environments where the admin provisions client credentials ahead of time. The SDK's `AuthorizationCodeHandler` already supports both registration methods — we just need to configure it based on CLI flags.
+
+**Validation:** The flags must be used together (both or neither). When set, `PreregisteredClientConfig` takes priority; when absent, `DynamicClientRegistrationConfig` is used as before.
+
+### 12. Cross-platform lockfile support
+
+**Decision:** Split lockfile implementation into platform-specific files using build tags: `lockfile_unix.go` (Flock) and `lockfile_windows.go` (LockFileEx).
+
+**Why:** The original implementation used `syscall.Flock` which only works on Unix. Windows requires `LockFileEx` from `kernel32.dll` for advisory file locking, and `OpenProcess`/`GetExitCodeProcess` for process liveness checks. Platform-specific build tags are the idiomatic Go approach.
+
 ## Known limitations
 
-1. **Static OAuth client credentials not supported.** Only Dynamic Client Registration is implemented. Pre-registered clients and Client ID Metadata Documents require additional CLI flags and handler configuration.
+1. **SSE transport lacks OAuth integration.** The SDK's `SSEClientTransport` does not have an `OAuthHandler` field. OAuth works with HTTP Streamable transport (the default). For SSE-only servers that require OAuth, a custom `http.RoundTripper` would need to inject bearer tokens — this is not yet implemented.
 
-2. **SSE transport lacks OAuth integration.** The SDK's `SSEClientTransport` does not have an `OAuthHandler` field. OAuth works with HTTP Streamable transport (the default). For SSE-only servers that require OAuth, a custom `http.RoundTripper` would need to inject bearer tokens — this is not yet implemented.
+2. **Tool filter matches response shape, not method.** Since JSON-RPC responses don't carry the method name, the remote→local interceptor checks for the presence of a `"tools"` array in the response. This heuristic could theoretically match non-tools/list responses that happen to have a `"tools"` key.
 
-3. **No token encryption at rest.** Tokens are stored as plaintext JSON in `~/.mcp-auth/` with `0600` permissions. This matches mcp-remote's approach, but is worth noting for security-sensitive environments.
-
-4. **Lockfile coordination is Unix-only.** `syscall.Flock` is used for advisory locking, which is available on Linux and macOS. Windows support would require `LockFileEx` or a different coordination mechanism.
-
-5. **Tool filter matches response shape, not method.** Since JSON-RPC responses don't carry the method name, the remote→local interceptor checks for the presence of a `"tools"` array in the response. This heuristic could theoretically match non-tools/list responses that happen to have a `"tools"` key.
+3. **Client ID Metadata Documents not supported.** The SDK supports CIMD-based registration, but mcp-shuttle doesn't yet expose flags for this registration method.
 
 ## Future work
 
-- Static OAuth client credentials (`--static-oauth-client-metadata`, `--static-oauth-client-info`)
 - Client ID Metadata Documents support
 - SSE transport OAuth via bearer token RoundTripper
-- Windows lockfile support
 - Request ID tracking for precise tool filter response matching
 - Prometheus metrics endpoint for observability
 - Configurable token storage directory (`MCP_SHUTTLE_CONFIG_DIR`)
+- OS keyring integration for encryption key storage

@@ -149,8 +149,23 @@ No OAuth configuration is needed — just point at the server URL:
 |------|-------------|
 | `--port 3334` | OAuth callback port (default 3334, auto-selects if busy) |
 | `--resource tenant-123` | Isolates OAuth sessions for multi-tenant servers |
+| `--oauth-client-id ID` | Pre-registered OAuth client ID (skips dynamic registration) |
+| `--oauth-client-secret SECRET` | Pre-registered OAuth client secret (required with `--oauth-client-id`) |
 
-**Token storage:** Tokens are stored as JSON in `~/.mcp-auth/` with `0600` permissions, keyed by a SHA-256 hash of the server URL (and resource identifier, if set). Tokens persist across process restarts.
+**Pre-registered clients:** If your OAuth server doesn't support Dynamic Client Registration, use static credentials:
+
+```json
+{
+  "command": "mcp-shuttle",
+  "args": [
+    "https://mcp.example.com",
+    "--oauth-client-id", "my-client-id",
+    "--oauth-client-secret", "my-client-secret"
+  ]
+}
+```
+
+**Token storage:** Tokens are encrypted at rest using AES-256-GCM and stored in `~/.mcp-auth/` with `0600` permissions, keyed by a SHA-256 hash of the server URL (and resource identifier, if set). Tokens persist across process restarts. Legacy plaintext tokens from earlier versions are read transparently.
 
 **Multi-instance coordination:** If multiple mcp-shuttle instances connect to the same OAuth server simultaneously, only one will open the browser. Others wait for the first instance to complete the flow and then read the stored token from disk.
 
@@ -205,6 +220,10 @@ Options:
         OAuth callback port (default 3334)
   -resource string
         Resource identifier for OAuth session isolation
+  -oauth-client-id string
+        Pre-registered OAuth client ID
+  -oauth-client-secret string
+        Pre-registered OAuth client secret
   -allow-http
         Allow unencrypted HTTP connections
   -debug
@@ -249,8 +268,7 @@ With:
 | Second positional arg (port) | `--port 3334` | Named flag instead of positional |
 | `--host 127.0.0.1` | Not needed | Always binds to 127.0.0.1 |
 | `--enable-proxy` | Not needed | Go respects `HTTP_PROXY`/`HTTPS_PROXY` by default |
-| `--static-oauth-client-metadata` | Not yet supported | Dynamic registration only |
-| `--static-oauth-client-info` | Not yet supported | Dynamic registration only |
+| `--static-oauth-client-info` | `--oauth-client-id` + `--oauth-client-secret` | Separate flags for ID and secret |
 
 **Token storage compatibility:** mcp-shuttle stores tokens in the same `~/.mcp-auth/` directory as mcp-remote, but uses a different file naming scheme. Existing mcp-remote tokens will not be reused — you'll need to re-authenticate once.
 

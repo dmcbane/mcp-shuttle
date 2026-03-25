@@ -25,6 +25,11 @@ type HandlerConfig struct {
 	Storage      *Storage
 	HTTPClient   *http.Client
 	Resource     string // optional resource identifier for session isolation
+
+	// Static OAuth credentials for pre-registered clients.
+	// When set, PreregisteredClientConfig is used instead of Dynamic Client Registration.
+	OAuthClientID     string
+	OAuthClientSecret string
 }
 
 // storageKey returns the key used for token storage, incorporating
@@ -65,8 +70,24 @@ func NewHandler(cfg *HandlerConfig) (*Handler, error) {
 
 	redirectURL := CallbackURL(cfg.CallbackPort)
 
-	inner, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
-		DynamicClientRegistrationConfig: &auth.DynamicClientRegistrationConfig{
+	handlerCfg := &auth.AuthorizationCodeHandlerConfig{
+		RedirectURL:              redirectURL,
+		AuthorizationCodeFetcher: h.fetchAuthorizationCode,
+		Client:                   cfg.HTTPClient,
+	}
+
+	if cfg.OAuthClientID != "" {
+		// Use pre-registered client credentials.
+		cfg.Logger.Info("using pre-registered OAuth client", "client_id", cfg.OAuthClientID)
+		handlerCfg.PreregisteredClientConfig = &auth.PreregisteredClientConfig{
+			ClientSecretAuthConfig: &auth.ClientSecretAuthConfig{
+				ClientID:     cfg.OAuthClientID,
+				ClientSecret: cfg.OAuthClientSecret,
+			},
+		}
+	} else {
+		// Use dynamic client registration (default).
+		handlerCfg.DynamicClientRegistrationConfig = &auth.DynamicClientRegistrationConfig{
 			Metadata: &oauthex.ClientRegistrationMetadata{
 				RedirectURIs:           []string{redirectURL},
 				TokenEndpointAuthMethod: "none",
@@ -75,11 +96,10 @@ func NewHandler(cfg *HandlerConfig) (*Handler, error) {
 				ClientName:             "mcp-shuttle",
 				SoftwareID:             "mcp-shuttle",
 			},
-		},
-		RedirectURL:              redirectURL,
-		AuthorizationCodeFetcher: h.fetchAuthorizationCode,
-		Client:                   cfg.HTTPClient,
-	})
+		}
+	}
+
+	inner, err := auth.NewAuthorizationCodeHandler(handlerCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating authorization code handler: %w", err)
 	}

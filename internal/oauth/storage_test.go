@@ -4,6 +4,7 @@ package oauth
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,68 @@ func TestStorage_Delete(t *testing.T) {
 	}
 	if loaded != nil {
 		t.Errorf("expected nil after delete, got %+v", loaded)
+	}
+}
+
+func TestStorage_EncryptedOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStorage(dir)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	serverURL := "https://mcp.example.com"
+	token := &oauth2.Token{AccessToken: "super-secret", TokenType: "Bearer"}
+
+	if err := store.SaveToken(serverURL, token); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+
+	// Read the raw file and verify it's encrypted (not plaintext JSON).
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		data, err := os.ReadFile(dir + "/" + e.Name())
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		content := string(data)
+		if strings.Contains(content, "super-secret") {
+			t.Error("token file contains plaintext access token — should be encrypted")
+		}
+		if !strings.HasPrefix(content, encryptedPrefix) {
+			t.Errorf("token file missing encrypted prefix, got: %s", content[:min(50, len(content))])
+		}
+	}
+}
+
+func TestStorage_BackwardCompatibility_PlaintextToken(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStorage(dir)
+	if err != nil {
+		t.Fatalf("NewStorage: %v", err)
+	}
+
+	// Simulate a legacy plaintext token file (pre-encryption).
+	serverURL := "https://legacy.example.com"
+	plaintextJSON := `{"access_token":"legacy-token","token_type":"Bearer","refresh_token":"legacy-refresh"}`
+	path := dir + "/" + keyHash(serverURL) + "_tokens.json"
+	if err := os.WriteFile(path, []byte(plaintextJSON), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// LoadToken should transparently handle the plaintext file.
+	loaded, err := store.LoadToken(serverURL)
+	if err != nil {
+		t.Fatalf("LoadToken: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("LoadToken returned nil for legacy plaintext token")
+	}
+	if loaded.AccessToken != "legacy-token" {
+		t.Errorf("AccessToken = %q, want %q", loaded.AccessToken, "legacy-token")
+	}
+	if loaded.RefreshToken != "legacy-refresh" {
+		t.Errorf("RefreshToken = %q, want %q", loaded.RefreshToken, "legacy-refresh")
 	}
 }
 

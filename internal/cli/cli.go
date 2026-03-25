@@ -34,8 +34,10 @@ type Config struct {
 	AllowHTTP    bool
 	Debug        bool
 	Silent       bool
-	IgnoreTools  []string
-	Resource     string
+	IgnoreTools    []string
+	Resource       string
+	OAuthClientID     string
+	OAuthClientSecret string
 }
 
 // Parse parses CLI arguments and returns a Config. The args slice should not
@@ -53,7 +55,8 @@ func Parse(args []string) (*Config, error) {
 			// If it's a flag that takes a value (not a boolean), consume the next arg too.
 			// We check by looking at known value-bearing flags.
 			switch args[i] {
-			case "--header", "--transport", "--port", "--ignore-tool", "--resource":
+			case "--header", "--transport", "--port", "--ignore-tool", "--resource",
+				"--oauth-client-id", "--oauth-client-secret":
 				if i+1 < len(args) {
 					i++
 					flagArgs = append(flagArgs, args[i])
@@ -77,6 +80,8 @@ func Parse(args []string) (*Config, error) {
 	debug := fs.Bool("debug", false, "Enable debug logging to stderr")
 	silent := fs.Bool("silent", false, "Suppress all logging output")
 	resource := fs.String("resource", "", "Resource identifier for OAuth session isolation")
+	oauthClientID := fs.String("oauth-client-id", "", "Pre-registered OAuth client ID")
+	oauthClientSecret := fs.String("oauth-client-secret", "", "Pre-registered OAuth client secret")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
@@ -108,15 +113,21 @@ func Parse(args []string) (*Config, error) {
 		parsedHeaders[strings.TrimSpace(name)] = strings.TrimSpace(value)
 	}
 
+	if (*oauthClientID == "") != (*oauthClientSecret == "") {
+		return nil, fmt.Errorf("--oauth-client-id and --oauth-client-secret must be used together")
+	}
+
 	return &Config{
-		ServerURL:    serverURL,
-		CallbackPort: *callbackPort,
-		Headers:      parsedHeaders,
-		Transport:    mode,
-		AllowHTTP:    *allowHTTP,
-		Debug:        *debug,
-		Silent:       *silent,
-		IgnoreTools:  ignoreTools,
-		Resource:     *resource,
+		ServerURL:         serverURL,
+		CallbackPort:      *callbackPort,
+		Headers:           parsedHeaders,
+		Transport:         mode,
+		AllowHTTP:         *allowHTTP,
+		Debug:             *debug,
+		Silent:            *silent,
+		IgnoreTools:       ignoreTools,
+		Resource:          *resource,
+		OAuthClientID:     *oauthClientID,
+		OAuthClientSecret: *oauthClientSecret,
 	}, nil
 }

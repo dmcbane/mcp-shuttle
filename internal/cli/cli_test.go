@@ -118,6 +118,33 @@ func TestParse_Resource(t *testing.T) {
 	}
 }
 
+func TestParse_OAuthStaticCredentials(t *testing.T) {
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--oauth-client-id", "my-client",
+		"--oauth-client-secret", "my-secret",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OAuthClientID != "my-client" {
+		t.Errorf("OAuthClientID = %q, want %q", cfg.OAuthClientID, "my-client")
+	}
+	if cfg.OAuthClientSecret != "my-secret" {
+		t.Errorf("OAuthClientSecret = %q, want %q", cfg.OAuthClientSecret, "my-secret")
+	}
+}
+
+func TestParse_OAuthStaticCredentials_MissingSecret(t *testing.T) {
+	_, err := Parse([]string{
+		"https://mcp.example.com",
+		"--oauth-client-id", "my-client",
+	})
+	if err == nil {
+		t.Fatal("expected error when --oauth-client-id is set without --oauth-client-secret")
+	}
+}
+
 func TestParse_DebugAndSilent(t *testing.T) {
 	cfg, err := Parse([]string{"https://mcp.example.com", "--debug"})
 	if err != nil {

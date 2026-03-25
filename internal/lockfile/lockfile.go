@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -36,8 +35,8 @@ func Acquire(dir string, name string) (*Lock, *LockInfo, error) {
 		return nil, nil, fmt.Errorf("opening lock file: %w", err)
 	}
 
-	// Try non-blocking exclusive lock.
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	// Try non-blocking exclusive lock (platform-specific).
+	err = tryLock(f)
 	if err != nil {
 		// Lock is held by another process. Read the info.
 		var info LockInfo
@@ -78,7 +77,7 @@ func (l *Lock) Release() error {
 	if l.file == nil {
 		return nil
 	}
-	syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	unlock(l.file)
 	l.file.Close()
 	os.Remove(l.path)
 	l.file = nil
@@ -91,12 +90,5 @@ func (info *LockInfo) IsStale(maxAge time.Duration) bool {
 	if time.Since(info.Timestamp) > maxAge {
 		return true
 	}
-	// Check if the process is still alive.
-	proc, err := os.FindProcess(info.PID)
-	if err != nil {
-		return true
-	}
-	// On Unix, FindProcess always succeeds. Send signal 0 to check.
-	err = proc.Signal(syscall.Signal(0))
-	return err != nil
+	return !isProcessAlive(info.PID)
 }

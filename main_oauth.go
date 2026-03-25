@@ -19,12 +19,14 @@ func init() {
 		}
 
 		handler, err := oauth.NewHandler(&oauth.HandlerConfig{
-			ServerURL:    cfg.ServerURL,
-			CallbackPort: cfg.CallbackPort,
-			Logger:       logger,
-			Storage:      storage,
-			HTTPClient:   baseClient,
-			Resource:     cfg.Resource,
+			ServerURL:         cfg.ServerURL,
+			CallbackPort:      cfg.CallbackPort,
+			Logger:            logger,
+			Storage:           storage,
+			HTTPClient:        baseClient,
+			Resource:          cfg.Resource,
+			OAuthClientID:     cfg.OAuthClientID,
+			OAuthClientSecret: cfg.OAuthClientSecret,
 		})
 		if err != nil {
 			return nil, err
