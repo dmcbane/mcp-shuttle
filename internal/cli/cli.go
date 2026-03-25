@@ -6,6 +6,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/dmcbane/mcp-shuttle/internal/filter"
 )
 
 // TransportMode controls how the proxy connects to the remote server.
@@ -37,6 +39,7 @@ type Config struct {
 	Debug             bool
 	Silent            bool
 	IgnoreTools       []string
+	AllowTools        []string
 	Resource          string
 	OAuthClientID     string
 	OAuthClientSecret string
@@ -80,7 +83,7 @@ func Parse(args []string) (*Config, error) {
 			// If it's a flag that takes a value (not a boolean), consume the next arg too.
 			// We check by looking at known value-bearing flags.
 			switch args[i] {
-			case "--header", "--transport", "--port", "--ignore-tool", "--resource",
+			case "--header", "--transport", "--port", "--ignore-tool", "--allow-tool", "--resource",
 				"--oauth-client-id", "--oauth-client-secret", "--max-message-size":
 				if i+1 < len(args) {
 					i++
@@ -96,8 +99,10 @@ func Parse(args []string) (*Config, error) {
 
 	var headers headerList
 	var ignoreTools headerList
+	var allowTools headerList
 	fs.Var(&headers, "header", "Custom header in 'Name: Value' format (repeatable, supports ${ENV_VAR})")
 	fs.Var(&ignoreTools, "ignore-tool", "Tool name pattern to hide (wildcard, repeatable)")
+	fs.Var(&allowTools, "allow-tool", "Tool name pattern to allow (default-deny, wildcard, repeatable)")
 
 	transport := fs.String("transport", "http-first", "Transport strategy: http-first, sse-first, http-only, sse-only")
 	callbackPort := fs.Int("port", 3334, "OAuth callback port")
@@ -148,6 +153,23 @@ func Parse(args []string) (*Config, error) {
 		return nil, fmt.Errorf("--oauth-client-id and --oauth-client-secret must be used together")
 	}
 
+	// --allow-tool and --ignore-tool are mutually exclusive.
+	if len(allowTools) > 0 && len(ignoreTools) > 0 {
+		return nil, fmt.Errorf("--allow-tool and --ignore-tool cannot be used together")
+	}
+
+	// Validate glob patterns at startup to catch syntax errors early.
+	for _, p := range ignoreTools {
+		if err := filter.ValidatePattern(p); err != nil {
+			return nil, fmt.Errorf("invalid --ignore-tool pattern %q: %w", p, err)
+		}
+	}
+	for _, p := range allowTools {
+		if err := filter.ValidatePattern(p); err != nil {
+			return nil, fmt.Errorf("invalid --allow-tool pattern %q: %w", p, err)
+		}
+	}
+
 	return &Config{
 		ServerURL:         serverURL,
 		CallbackPort:      *callbackPort,
@@ -157,6 +179,7 @@ func Parse(args []string) (*Config, error) {
 		Debug:             *debug,
 		Silent:            *silent,
 		IgnoreTools:       ignoreTools,
+		AllowTools:        allowTools,
 		Resource:          *resource,
 		OAuthClientID:     *oauthClientID,
 		OAuthClientSecret: *oauthClientSecret,

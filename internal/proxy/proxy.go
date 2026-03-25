@@ -273,6 +273,111 @@ func ToolFilterInterceptors(patterns []string, logger *slog.Logger) (localToRemo
 	return localToRemote, remoteToLocal
 }
 
+// AllowToolFilterInterceptors returns interceptors that only allow tools matching
+// the given patterns (default-deny). This is the inverse of ToolFilterInterceptors.
+// Returns nil, nil if patterns is empty.
+func AllowToolFilterInterceptors(patterns []string, logger *slog.Logger) (localToRemote, remoteToLocal MessageInterceptor) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	var mu sync.Mutex
+	pendingListIDs := make(map[string]bool)
+
+	localToRemote = func(msg jsonrpc.Message) (jsonrpc.Message, jsonrpc.Message, error) {
+		req, ok := msg.(*jsonrpc.Request)
+		if !ok {
+			return msg, nil, nil
+		}
+
+		if req.Method == "tools/list" && req.ID.IsValid() {
+			key := idKey(req.ID)
+			mu.Lock()
+			pendingListIDs[key] = true
+			mu.Unlock()
+		}
+
+		if req.Method != "tools/call" {
+			return msg, nil, nil
+		}
+
+		var call struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &call); err != nil {
+			return msg, nil, nil
+		}
+		// Block if the tool does NOT match any allow pattern.
+		if !matchesAny(patterns, call.Name) {
+			logger.Info("blocked non-allowed tool call", "tool", call.Name)
+			resp := &jsonrpc.Response{
+				ID: req.ID,
+				Error: &jsonrpc.Error{
+					Code:    jsonrpc.CodeMethodNotFound,
+					Message: "tool not found: " + call.Name,
+				},
+			}
+			return nil, resp, nil
+		}
+		return msg, nil, nil
+	}
+
+	remoteToLocal = func(msg jsonrpc.Message) (jsonrpc.Message, jsonrpc.Message, error) {
+		resp, ok := msg.(*jsonrpc.Response)
+		if !ok || resp.Result == nil {
+			return msg, nil, nil
+		}
+
+		key := idKey(resp.ID)
+		mu.Lock()
+		isToolsList := pendingListIDs[key]
+		if isToolsList {
+			delete(pendingListIDs, key)
+		}
+		mu.Unlock()
+
+		if !isToolsList {
+			return msg, nil, nil
+		}
+
+		var result map[string]json.RawMessage
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return msg, nil, nil
+		}
+		toolsRaw, ok := result["tools"]
+		if !ok {
+			return msg, nil, nil
+		}
+
+		var tools []json.RawMessage
+		if err := json.Unmarshal(toolsRaw, &tools); err != nil {
+			return msg, nil, nil
+		}
+
+		filtered := make([]json.RawMessage, 0, len(tools))
+		for _, raw := range tools {
+			var entry struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				filtered = append(filtered, raw)
+				continue
+			}
+			if matchesAny(patterns, entry.Name) {
+				filtered = append(filtered, raw)
+			} else {
+				logger.Debug("filtered non-allowed tool from list", "tool", entry.Name)
+			}
+		}
+
+		result["tools"], _ = json.Marshal(filtered)
+		resp.Result, _ = json.Marshal(result)
+		return resp, nil, nil
+	}
+
+	return localToRemote, remoteToLocal
+}
+
 func matchesAny(patterns []string, name string) bool {
 	for _, p := range patterns {
 		if matched, _ := path.Match(p, name); matched {

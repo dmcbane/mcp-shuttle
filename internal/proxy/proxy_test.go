@@ -372,3 +372,74 @@ func TestProxy_ToolFilterOnlyFiltersToolsListResponses(t *testing.T) {
 
 	cancel()
 }
+
+func TestProxy_AllowToolFilterBlocksUnlisted(t *testing.T) {
+	localClient, localServer := mcp.NewInMemoryTransports()
+	remoteClient, remoteServer := mcp.NewInMemoryTransports()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Allow-list mode: only "read_*" tools are permitted.
+	toRemote, toLocal := AllowToolFilterInterceptors([]string{"read_*"}, logger)
+	p := &Proxy{
+		Logger:          logger,
+		OnLocalToRemote: toRemote,
+		OnRemoteToLocal: toLocal,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() { p.Run(ctx, localServer, remoteClient) }()
+
+	localConn, _ := localClient.Connect(ctx)
+	defer localConn.Close()
+
+	// A non-allowed tool call should be blocked.
+	reqID, _ := jsonrpc.MakeID(float64(1))
+	req := &jsonrpc.Request{
+		ID:     reqID,
+		Method: "tools/call",
+		Params: json.RawMessage(`{"name":"delete_file","arguments":{}}`),
+	}
+	if err := localConn.Write(ctx, req); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msg, err := localConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	resp, ok := msg.(*jsonrpc.Response)
+	if !ok {
+		t.Fatalf("expected *jsonrpc.Response, got %T", msg)
+	}
+	if resp.Error == nil {
+		t.Fatal("expected error for non-allowed tool call")
+	}
+
+	// An allowed tool call should pass through.
+	_ = remoteServer
+	reqID2, _ := jsonrpc.MakeID(float64(2))
+	req2 := &jsonrpc.Request{
+		ID:     reqID2,
+		Method: "tools/call",
+		Params: json.RawMessage(`{"name":"read_file","arguments":{}}`),
+	}
+	if err := localConn.Write(ctx, req2); err != nil {
+		t.Fatalf("write allowed: %v", err)
+	}
+
+	remoteConn, _ := remoteServer.Connect(ctx)
+	defer remoteConn.Close()
+
+	rmsg, err := remoteConn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read on remote: %v", err)
+	}
+	gotReq, ok := rmsg.(*jsonrpc.Request)
+	if !ok || gotReq.Method != "tools/call" {
+		t.Fatalf("expected tools/call, got %T %v", rmsg, rmsg)
+	}
+
+	cancel()
+}

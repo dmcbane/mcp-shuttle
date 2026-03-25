@@ -80,6 +80,35 @@ func TestFilterToolsList_EmptyPatterns(t *testing.T) {
 	}
 }
 
+func TestShouldAllow(t *testing.T) {
+	patterns := []string{"read_*", "list_*", "get_info"}
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"read_file", true},
+		{"list_items", true},
+		{"get_info", true},
+		{"delete_file", false},
+		{"admin_panel", false},
+	}
+
+	for _, tt := range tests {
+		got := ShouldAllow(patterns, tt.name)
+		if got != tt.want {
+			t.Errorf("ShouldAllow(%v, %q) = %v, want %v", patterns, tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestShouldAllow_EmptyPatterns(t *testing.T) {
+	// Empty allow-list means allow everything.
+	if !ShouldAllow(nil, "anything") {
+		t.Error("empty allow patterns should allow everything")
+	}
+}
+
 func TestIsToolCallBlocked(t *testing.T) {
 	patterns := []string{"delete*", "admin_*"}
 

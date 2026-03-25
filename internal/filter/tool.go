@@ -22,6 +22,26 @@ func ShouldIgnore(patterns []string, toolName string) bool {
 	return false
 }
 
+// ShouldAllow returns true if the tool name matches any of the allow patterns.
+// An empty allow list permits all tools (no filtering).
+func ShouldAllow(patterns []string, toolName string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, p := range patterns {
+		if MatchesTool(p, toolName) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidatePattern checks if a glob pattern is syntactically valid for path.Match.
+func ValidatePattern(pattern string) error {
+	_, err := path.Match(pattern, "")
+	return err
+}
+
 // toolEntry represents a single tool in a tools/list response.
 // We use a raw approach to preserve all fields.
 type toolEntry struct {

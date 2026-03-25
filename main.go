@@ -69,8 +69,13 @@ func main() {
 	// Remote side: build transport based on mode.
 	remote := buildRemoteTransport(cfg, httpClient, oauthHandler, logger)
 
-	// Set up tool filtering interceptors.
-	toRemote, toLocal := proxy.ToolFilterInterceptors(cfg.IgnoreTools, logger)
+	// Set up tool filtering interceptors (ignore-list or allow-list, mutually exclusive).
+	var toRemote, toLocal proxy.MessageInterceptor
+	if len(cfg.AllowTools) > 0 {
+		toRemote, toLocal = proxy.AllowToolFilterInterceptors(cfg.AllowTools, logger)
+	} else {
+		toRemote, toLocal = proxy.ToolFilterInterceptors(cfg.IgnoreTools, logger)
+	}
 
 	logger.Info("starting proxy",
 		"version", Version,

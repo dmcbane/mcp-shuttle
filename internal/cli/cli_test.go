@@ -194,6 +194,54 @@ func TestParse_MaxMessageSizeDefault(t *testing.T) {
 	}
 }
 
+func TestParse_InvalidIgnoreToolPattern(t *testing.T) {
+	_, err := Parse([]string{
+		"https://mcp.example.com",
+		"--ignore-tool", "[unclosed",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid glob pattern in --ignore-tool")
+	}
+}
+
+func TestParse_AllowTool(t *testing.T) {
+	cfg, err := Parse([]string{
+		"https://mcp.example.com",
+		"--allow-tool", "read_*",
+		"--allow-tool", "list_*",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.AllowTools) != 2 {
+		t.Fatalf("got %d allow patterns, want 2", len(cfg.AllowTools))
+	}
+	if cfg.AllowTools[0] != "read_*" || cfg.AllowTools[1] != "list_*" {
+		t.Errorf("got AllowTools=%v, want [read_* list_*]", cfg.AllowTools)
+	}
+}
+
+func TestParse_InvalidAllowToolPattern(t *testing.T) {
+	_, err := Parse([]string{
+		"https://mcp.example.com",
+		"--allow-tool", "[bad",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid glob pattern in --allow-tool")
+	}
+}
+
+func TestParse_AllowAndIgnoreToolMutuallyExclusive(t *testing.T) {
+	_, err := Parse([]string{
+		"https://mcp.example.com",
+		"--allow-tool", "read_*",
+		"--ignore-tool", "delete_*",
+	})
+	if err == nil {
+		t.Fatal("expected error when both --allow-tool and --ignore-tool are used")
+	}
+}
+
 func TestParse_DebugAndSilent(t *testing.T) {
 	cfg, err := Parse([]string{"https://mcp.example.com", "--debug"})
 	if err != nil {
