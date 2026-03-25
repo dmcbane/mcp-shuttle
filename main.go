@@ -16,7 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 // setupOAuth is set by main_oauth.go when built with the mcp_go_client_oauth tag.
 var setupOAuth func(cfg *cli.Config, logger *slog.Logger, baseClient *http.Client) (auth.OAuthHandler, error)
