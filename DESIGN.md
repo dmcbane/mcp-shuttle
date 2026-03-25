@@ -113,6 +113,30 @@ Reimplementing this would be hundreds of lines of security-critical code. By emb
 
 **Why:** Tool filtering needs to intercept messages in both directions (block `tools/call` requests and filter `tools/list` responses). Rather than hardcoding this into the forwarding loop, the interceptor pattern makes the proxy extensible for future features (rate limiting, logging, message transformation) without modifying core code.
 
+### 10. Token encryption at rest
+
+**Decision:** Encrypt stored tokens using AES-256-GCM with a key derived via HKDF from a machine-specific secret (UID + username + hostname + home directory).
+
+**Why:** Plaintext tokens in `~/.mcp-auth/` are vulnerable to casual file access on shared systems or if backups are compromised. AES-256-GCM provides authenticated encryption. The machine-specific key means tokens encrypted on one machine/user can't be decrypted by another, providing defense-in-depth alongside the `0600` file permissions.
+
+**Trade-off:** The key derivation uses non-secret inputs (hostname, UID, home path). This protects against casual access and cross-machine/cross-user scenarios, but not against a determined attacker with root access on the same machine. True secret-based encryption would require a user-provided passphrase or OS keyring integration, which adds UX friction.
+
+**Backward compatibility:** Files without the `mcp-shuttle-enc:1:` prefix are treated as legacy plaintext and loaded transparently. New saves always encrypt.
+
+### 11. Static OAuth client credentials
+
+**Decision:** Support pre-registered OAuth clients via `--oauth-client-id` and `--oauth-client-secret` flags, using the SDK's `PreregisteredClientConfig`.
+
+**Why:** Some OAuth servers don't support Dynamic Client Registration. Pre-registered clients are common in enterprise environments where the admin provisions client credentials ahead of time. The SDK's `AuthorizationCodeHandler` already supports both registration methods — we just need to configure it based on CLI flags.
+
+**Validation:** The flags must be used together (both or neither). When set, `PreregisteredClientConfig` takes priority; when absent, `DynamicClientRegistrationConfig` is used as before.
+
+### 12. Cross-platform lockfile support
+
+**Decision:** Split lockfile implementation into platform-specific files using build tags: `lockfile_unix.go` (Flock) and `lockfile_windows.go` (LockFileEx).
+
+**Why:** The original implementation used `syscall.Flock` which only works on Unix. Windows requires `LockFileEx` from `kernel32.dll` for advisory file locking, and `OpenProcess`/`GetExitCodeProcess` for process liveness checks. Platform-specific build tags are the idiomatic Go approach.
+
 ## Project structure
 
 ```
@@ -141,7 +165,9 @@ mcp-shuttle/
 │   │   ├── callback.go         # Local HTTP server for OAuth redirect
 │   │   ├── callback_test.go
 │   │   ├── browser.go          # Platform-specific browser launch
-│   │   ├── storage.go          # Token persistence to ~/.mcp-auth/
+│   │   ├── crypto.go           # AES-256-GCM encryption + HKDF key derivation
+│   │   ├── crypto_test.go
+│   │   ├── storage.go          # Encrypted token persistence to ~/.mcp-auth/
 │   │   └── storage_test.go
 │   │
 │   ├── filter/
@@ -149,7 +175,9 @@ mcp-shuttle/
 │   │   └── tool_test.go
 │   │
 │   └── lockfile/
-│       ├── lockfile.go         # Advisory file locking for OAuth coordination
+│       ├── lockfile.go         # Cross-platform lock coordination (shared logic)
+│       ├── lockfile_unix.go    # Unix: syscall.Flock + signal 0
+│       ├── lockfile_windows.go # Windows: LockFileEx + GetExitCodeProcess
 │       └── lockfile_test.go
 │
 ├── DESIGN.md                   # This document
@@ -172,30 +200,6 @@ mcp-shuttle/
 | [RFC 8414 - Authorization Server Metadata](https://www.rfc-editor.org/rfc/rfc8414) | Via SDK `oauthex.GetAuthServerMeta` |
 | [RFC 7636 - PKCE](https://datatracker.ietf.org/doc/html/rfc7636) | Via `oauth2.GenerateVerifier()` + S256 |
 | [JSON-RPC 2.0](https://www.jsonrpc.org/specification) | Via SDK `jsonrpc` package |
-
-### 10. Token encryption at rest
-
-**Decision:** Encrypt stored tokens using AES-256-GCM with a key derived via HKDF from a machine-specific secret (UID + username + hostname + home directory).
-
-**Why:** Plaintext tokens in `~/.mcp-auth/` are vulnerable to casual file access on shared systems or if backups are compromised. AES-256-GCM provides authenticated encryption. The machine-specific key means tokens encrypted on one machine/user can't be decrypted by another, providing defense-in-depth alongside the `0600` file permissions.
-
-**Trade-off:** The key derivation uses non-secret inputs (hostname, UID, home path). This protects against casual access and cross-machine/cross-user scenarios, but not against a determined attacker with root access on the same machine. True secret-based encryption would require a user-provided passphrase or OS keyring integration, which adds UX friction.
-
-**Backward compatibility:** Files without the `mcp-shuttle-enc:1:` prefix are treated as legacy plaintext and loaded transparently. New saves always encrypt.
-
-### 11. Static OAuth client credentials
-
-**Decision:** Support pre-registered OAuth clients via `--oauth-client-id` and `--oauth-client-secret` flags, using the SDK's `PreregisteredClientConfig`.
-
-**Why:** Some OAuth servers don't support Dynamic Client Registration. Pre-registered clients are common in enterprise environments where the admin provisions client credentials ahead of time. The SDK's `AuthorizationCodeHandler` already supports both registration methods — we just need to configure it based on CLI flags.
-
-**Validation:** The flags must be used together (both or neither). When set, `PreregisteredClientConfig` takes priority; when absent, `DynamicClientRegistrationConfig` is used as before.
-
-### 12. Cross-platform lockfile support
-
-**Decision:** Split lockfile implementation into platform-specific files using build tags: `lockfile_unix.go` (Flock) and `lockfile_windows.go` (LockFileEx).
-
-**Why:** The original implementation used `syscall.Flock` which only works on Unix. Windows requires `LockFileEx` from `kernel32.dll` for advisory file locking, and `OpenProcess`/`GetExitCodeProcess` for process liveness checks. Platform-specific build tags are the idiomatic Go approach.
 
 ## Known limitations
 
